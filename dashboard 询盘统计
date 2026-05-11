@@ -1,0 +1,112 @@
+// 注册仪表盘小工具
+add_action('wp_dashboard_setup', 'elementor_submissions_chart_widget');
+function elementor_submissions_chart_widget() {
+    wp_add_dashboard_widget(
+        'elementor_submissions_chart','近30天询盘统计','display_elementor_submissions_chart'
+    );
+}
+
+function display_elementor_submissions_chart() {
+    global $wpdb;
+	
+    $submissions_table = $wpdb->prefix . 'e_submissions_values';
+    $actions_log_table = $wpdb->prefix . 'e_submissions_actions_log';
+
+    $sql = $wpdb->prepare("
+        SELECT 
+            DATE(al.created_at) AS submission_date, 
+            COUNT(DISTINCT sv.submission_id) AS submission_count
+        FROM 
+            {$submissions_table} sv
+        LEFT JOIN 
+            {$actions_log_table} al ON sv.submission_id = al.submission_id
+        WHERE 
+            al.created_at BETWEEN DATE_SUB(CURDATE(), INTERVAL 29 DAY) AND CURDATE() + INTERVAL 1 DAY
+        GROUP BY 
+            submission_date
+        ORDER BY 
+            submission_date ASC
+    ");
+
+    $results = $wpdb->get_results($sql, ARRAY_A);
+
+    $dates = [];
+    $counts = [];
+	
+    $period = new DatePeriod(
+        new DateTime('-29 days'),
+        new DateInterval('P1D'),
+        new DateTime('+1 day')
+    );
+
+    $submission_data = [];
+    if ($results) {
+        foreach ($results as $row) {
+            $submission_data[$row['submission_date']] = (int)$row['submission_count'];
+        }
+    }
+
+    foreach ($period as $date) {
+        $date_string = $date->format('Y-m-d');
+        $dates[] = $date->format('m/d');
+        $counts[] = $submission_data[$date_string] ?? 0;
+    }
+
+    $dates_json = json_encode($dates);
+    $counts_json = json_encode($counts);
+
+    wp_enqueue_script('chart-js', 'https://cdn.jsdelivr.net/npm/chart.js', [], null, true);
+
+    $script = "
+        (function() {
+            window.addEventListener('load', function() {
+                var ctx = document.getElementById('elementorChart').getContext('2d');
+                var myChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: $dates_json,
+                        datasets: [{
+                            label: '每日收到询盘数量',
+                            data: $counts_json,
+                            fill: false,
+                            borderColor: 'rgb(0, 87, 167)',
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+    beginAtZero: true,
+    ticks: {
+        stepSize: 1,
+        precision: 0,
+        callback: function(value) {
+            if (Number.isInteger(value)) {
+                return value;
+            }
+        }
+    },
+    title: {
+        display: true,
+        text: '数量'
+    }
+},
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: '日期'
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+        })();
+    ";
+    
+    wp_add_inline_script('chart-js', $script);
+	
+    echo '<div style="width:100%;"><canvas id="elementorChart" height="200"></canvas></div>';
+}
