@@ -1,0 +1,436 @@
+if ( ! defined( 'MY_PRODUCT_CPT' ) ) {
+	define( 'MY_PRODUCT_CPT', 'product' ); // ← CPT slug
+}
+if ( ! defined( 'MY_PRODUCT_ORDER_FIELD' ) ) {
+	define( 'MY_PRODUCT_ORDER_FIELD', 'order' ); // ← ACF 字段名
+}
+/**
+ * ACF Gallery Shortcode
+ * [acf_product_gallery]
+ */
+add_shortcode( 'acf_product_gallery', function() {
+	$post_id = get_queried_object_id();
+	if ( ! $post_id ) {
+		$post_id = get_the_ID();
+	}
+	if ( ! $post_id ) {
+		return '<p>未获取到当前产品ID</p>';
+	}
+	$images = get_field( 'image_gallery', $post_id );
+	if ( empty( $images ) || ! is_array( $images ) ) {
+		return '<p>请上传产品图片</p>';
+	}
+	ob_start();
+	?>
+	<div class="product-gallery-wrapper">
+		<div class="swiper main-slider">
+			<div class="swiper-wrapper">
+				<?php foreach ( $images as $image ) : ?>
+					<?php
+					$image_id = is_array( $image ) ? ( $image['ID'] ?? 0 ) : $image;
+					if ( ! $image_id ) {
+						continue;
+					}
+					?>
+					<div class="swiper-slide">
+						<?php echo wp_get_attachment_image( $image_id, 'large' ); ?>
+					</div>
+				<?php endforeach; ?>
+			</div>
+			<div class="swiper-button-next"></div>
+			<div class="swiper-button-prev"></div>
+		</div>
+		<div class="swiper thumbs-slider">
+			<div class="swiper-wrapper">
+				<?php foreach ( $images as $image ) : ?>
+					<?php
+					$image_id = is_array( $image ) ? ( $image['ID'] ?? 0 ) : $image;
+					if ( ! $image_id ) {
+						continue;
+					}
+					?>
+					<div class="swiper-slide">
+						<?php echo wp_get_attachment_image( $image_id, 'thumbnail' ); ?>
+					</div>
+				<?php endforeach; ?>
+			</div>
+		</div>
+	</div>
+	<?php
+	return ob_get_clean();
+} );
+/**
+ * 当访问普通 category 分类页时，同时查询 post + product
+ */
+add_action( 'pre_get_posts', function( $query ) {
+	if ( is_admin() || ! $query->is_main_query() ) {
+		return;
+	}
+	if ( $query->is_category() ) {
+		$query->set( 'post_type', [ 'post', MY_PRODUCT_CPT ] );
+	}
+} );
+/**
+ * 后台 Products 列表页增加 Featured Image 列
+ */
+add_filter( 'manage_' . MY_PRODUCT_CPT . '_posts_columns', function( $columns ) {
+	$new_columns = [];
+	foreach ( $columns as $key => $label ) {
+		if ( $key === 'cb' ) {
+			$new_columns[ $key ] = $label;
+			$new_columns['featured_image'] = __( 'Image', 'textdomain' );
+		} else {
+			$new_columns[ $key ] = $label;
+		}
+	}
+	return $new_columns;
+} );
+add_action( 'manage_' . MY_PRODUCT_CPT . '_posts_custom_column', function( $column, $post_id ) {
+	if ( $column !== 'featured_image' ) {
+		return;
+	}
+	if ( has_post_thumbnail( $post_id ) ) {
+		echo get_the_post_thumbnail(
+			$post_id,
+			[ 60, 60 ],
+			[
+				'style' => 'width:60px;height:60px;object-fit:cover;border-radius:6px;',
+			]
+		);
+	} else {
+		echo '<span style="color:#aaa;">—</span>';
+	}
+}, 10, 2 );
+/**
+ * 后台产品图片列样式
+ */
+add_action( 'admin_head', function() {
+	$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+	if ( isset( $screen->post_type ) && $screen->post_type === MY_PRODUCT_CPT ) {
+		echo '<style>
+			.wp-list-table .column-featured_image {
+				width:130px !important;
+				text-align:center;
+			}
+			.wp-list-table .column-featured_image img {
+				width:100px;
+				height:100px;
+				object-fit:cover;
+			}
+		</style>';
+	}
+} );
+/**
+ * 注册 Rank Math 自定义变量 %product_short_description%
+ */
+add_action( 'rank_math/vars/register_extra_replacements', function() {
+	rank_math_register_var_replacement(
+		'product_short_description',
+		[
+			'name'        => 'Product Short Description',
+			'description' => '调用 ACF product_short_description 字段',
+			'variable'    => 'product_short_description',
+			'example'     => '产品简短描述内容',
+		],
+		function() {
+			$value = get_field( 'product_short_description' );
+			if ( empty( $value ) ) {
+				return '';
+			}
+			return wp_strip_all_tags( trim( $value ) );
+		}
+	);
+} );
+/**
+ * Product 后台列表：添加 Order 排序列
+ */
+add_filter( 'manage_' . MY_PRODUCT_CPT . '_posts_columns', 'product_add_order_column' );
+function product_add_order_column( $columns ) {
+	$new = [];
+	foreach ( $columns as $key => $label ) {
+		$new[ $key ] = $label;
+
+
+		if ( $key === 'title' ) {
+			$new['acf_order'] = '排序 (Order)';
+		}
+	}
+	return $new;
+}
+/**
+ * 显示 Order 列值
+ */
+add_action( 'manage_' . MY_PRODUCT_CPT . '_posts_custom_column', 'product_render_order_column', 10, 2 );
+function product_render_order_column( $column, $post_id ) {
+	if ( $column === 'acf_order' ) {
+		$order = get_field( MY_PRODUCT_ORDER_FIELD, $post_id );
+		echo ( $order !== '' && $order !== null )
+			? '<strong style="font-size:14px;">' . intval( $order ) . '</strong>'
+			: '<span style="color:#999;">—</span>';
+	}
+}
+/**
+ * 让 Order 列支持点击排序
+ */
+add_filter( 'manage_edit-' . MY_PRODUCT_CPT . '_sortable_columns', 'product_order_sortable_column' );
+function product_order_sortable_column( $columns ) {
+	$columns['acf_order'] = 'acf_order';
+	return $columns;
+}
+/**
+ * Quick Edit：注入 Order 输入框
+ */
+add_action( 'quick_edit_custom_box', 'product_quick_edit_order_field', 10, 2 );
+function product_quick_edit_order_field( $column_name, $post_type ) {
+	if ( $column_name !== 'acf_order' || $post_type !== MY_PRODUCT_CPT ) {
+		return;
+	}
+	?>
+	<fieldset class="inline-edit-col-left">
+		<div class="inline-edit-col">
+			<label>
+				<span class="title">排序 (Order)</span>
+				<input
+					type="number"
+					name="acf_order_value"
+					id="acf-order-quick-edit"
+					min="0"
+					step="1"
+					style="width:80px;"
+					placeholder="如：1"
+				>
+			</label>
+			<p style="margin:4px 0 0; color:#888; font-size:11px;">数字越小越靠前</p>
+		</div>
+	</fieldset>
+	<?php
+}
+/**
+ * Quick Edit：保存 Order 值
+ */
+add_action( 'save_post', 'product_save_quick_edit_order' );
+function product_save_quick_edit_order( $post_id ) {
+	if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+		return;
+	}
+	if ( ! current_user_can( 'edit_post', $post_id ) ) {
+		return;
+	}
+	if ( ! isset( $_POST['acf_order_value'] ) ) {
+		return;
+	}
+	if ( get_post_type( $post_id ) !== MY_PRODUCT_CPT ) {
+		return;
+	}
+	$order_value = intval( $_POST['acf_order_value'] );
+	update_field( MY_PRODUCT_ORDER_FIELD, $order_value, $post_id );
+}
+/**
+ * Quick Edit：自动填入当前 Order 值
+ */
+add_action( 'admin_footer-edit.php', 'product_quick_edit_order_js' );
+function product_quick_edit_order_js() {
+	global $post_type;
+	if ( $post_type !== MY_PRODUCT_CPT ) {
+		return;
+	}
+	?>
+	<script>
+	(function($) {
+		$('#the-list').on('click', '.editinline', function() {
+			var postId = $(this).closest('tr').attr('id').replace('post-', '');
+			var $row   = $('#post-' + postId);
+			var order  = $row.find('.column-acf_order strong').text().trim();
+			setTimeout(function() {
+				var $input = $('#acf-order-quick-edit');
+				if (order && order !== '—') {
+					$input.val(order);
+				} else {
+					$input.val('');
+				}
+			}, 50);
+		});
+	})(jQuery);
+	</script>
+	<?php
+}
+/**
+ * 统一 Product 排序逻辑
+ *
+ * 作用：
+ * 1. 后台 Products 列表默认按 ACF order 升序
+ * 2. 点击后台“排序 (Order)”列时，按 ACF order 升 / 降序
+ * 3. 前端 product archive / product_category / 普通 category（含 product）按 ACF order 升序
+ *
+ * 说明：
+ * - 有 order 的产品优先按数字从小到大
+ * - 没有 order 的内容排在后面，再按发布时间倒序
+ */
+add_action( 'pre_get_posts', 'product_unified_sorting_logic', 99 );
+function product_unified_sorting_logic( $query ) {
+	if ( ! $query->is_main_query() ) {
+		return;
+	}
+	// ----------------------------
+	// 后台 Products 列表页
+	// ----------------------------
+	if ( is_admin() ) {
+		global $pagenow, $typenow;
+		if ( $pagenow !== 'edit.php' ) {
+			return;
+		}
+		$current_post_type = $query->get( 'post_type' );
+		if ( empty( $current_post_type ) && ! empty( $_GET['post_type'] ) ) {
+			$current_post_type = sanitize_key( wp_unslash( $_GET['post_type'] ) );
+		}
+		if ( empty( $current_post_type ) && ! empty( $typenow ) ) {
+			$current_post_type = $typenow;
+		}
+		if ( $current_post_type !== MY_PRODUCT_CPT ) {
+			return;
+		}
+		$orderby = isset( $_GET['orderby'] ) ? sanitize_text_field( wp_unslash( $_GET['orderby'] ) ) : '';
+		$order   = isset( $_GET['order'] ) ? strtoupper( sanitize_text_field( wp_unslash( $_GET['order'] ) ) ) : 'ASC';
+		$order   = ( $order === 'DESC' ) ? 'DESC' : 'ASC';
+		if ( $orderby !== '' && $orderby !== 'acf_order' ) {
+			return;
+		}
+		$query->set(
+			'meta_query',
+			[
+				'relation' => 'OR',
+				[
+					'key'     => MY_PRODUCT_ORDER_FIELD,
+					'compare' => 'EXISTS',
+				],
+				[
+					'key'     => MY_PRODUCT_ORDER_FIELD,
+					'compare' => 'NOT EXISTS',
+				],
+			]
+		);
+		$query->set( 'meta_key', MY_PRODUCT_ORDER_FIELD );
+		$query->set( 'meta_type', 'NUMERIC' );
+		$query->set(
+			'orderby',
+			[
+				'meta_value_num' => $order,
+				'date'           => 'DESC',
+				'title'          => 'ASC',
+			]
+		);
+		return;
+	}
+	// ----------------------------
+	// 前端 product 相关归档页
+	// ----------------------------
+	$is_product_archive = $query->is_post_type_archive( MY_PRODUCT_CPT );
+	$is_product_tax     = $query->is_tax( [ 'product_category' ] );
+	$is_normal_category = $query->is_category();
+	if ( ! $is_product_archive && ! $is_product_tax && ! $is_normal_category ) {
+		return;
+	}
+	$current_post_type = $query->get( 'post_type' );
+	// 对普通分类页，前面已经把 post_type 扩展成 [post, product]
+	// 对 product archive / product taxonomy，则直接排序
+	if ( ! $is_normal_category ) {
+		if ( is_array( $current_post_type ) ) {
+			if ( ! in_array( MY_PRODUCT_CPT, $current_post_type, true ) ) {
+				return;
+			}
+		} elseif ( $current_post_type && $current_post_type !== MY_PRODUCT_CPT ) {
+			return;
+		}
+	}
+	$query->set(
+		'meta_query',
+		[
+			'relation' => 'OR',
+			[
+				'key'     => MY_PRODUCT_ORDER_FIELD,
+				'compare' => 'EXISTS',
+			],
+			[
+				'key'     => MY_PRODUCT_ORDER_FIELD,
+				'compare' => 'NOT EXISTS',
+			],
+		]
+	);
+	$query->set( 'meta_key', MY_PRODUCT_ORDER_FIELD );
+	$query->set( 'meta_type', 'NUMERIC' );
+	$query->set(
+		'orderby',
+		[
+			'meta_value_num' => 'ASC',
+			'date'           => 'DESC',
+			'title'          => 'ASC',
+		]
+	);
+}
+/**
+ * 相关产品 shortcode
+ * 用法：
+ * [related_products_by_current_tax]
+ */
+add_shortcode('related_products_by_current_tax', function($atts) {
+    if (!is_singular('product')) {
+        return '<p>当前不是 product 页面</p>';
+    }
+    $atts = shortcode_atts([
+        'limit' => 4,
+    ], $atts);
+    $current_post_id = get_queried_object_id();
+    $term_ids = wp_get_post_terms($current_post_id, 'category', [
+        'fields' => 'ids',
+    ]);
+    if (empty($term_ids)) {
+        return '<p>当前产品没有分类（category）</p>';
+    }
+    $query = new WP_Query([
+        'post_type'      => 'product',
+        'posts_per_page' => intval($atts['limit']),
+        'post__not_in'   => [$current_post_id],
+        'tax_query' => [
+            [
+                'taxonomy' => 'category',
+                'field'    => 'term_id',
+                'terms'    => $term_ids,
+            ],
+        ],
+        'meta_query' => [
+            'relation' => 'OR',
+            [
+                'key'     => 'order',
+                'compare' => 'EXISTS',
+            ],
+            [
+                'key'     => 'order',
+                'compare' => 'NOT EXISTS',
+            ],
+        ],
+        'meta_key'  => 'order',
+        'meta_type' => 'NUMERIC',
+        'orderby'   => [
+            'meta_value_num' => 'ASC',
+            'date'           => 'DESC',
+        ],
+    ]);
+    if (!$query->have_posts()) {
+        return '<p>当前分类下没有其他产品</p>';
+    }
+    ob_start();
+    ?>
+    <div class="related-products-grid">
+        <?php while ($query->have_posts()) : $query->the_post(); ?>
+            <div class="related-product-item">
+                <a href="<?php the_permalink(); ?>">
+                    <?php the_post_thumbnail('medium'); ?>
+                    <div><?php the_title(); ?></div>
+                </a>
+            </div>
+        <?php endwhile; ?>
+    </div>
+    <?php
+    wp_reset_postdata();
+    return ob_get_clean();
+});
